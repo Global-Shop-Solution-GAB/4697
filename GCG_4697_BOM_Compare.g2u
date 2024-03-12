@@ -1,0 +1,568 @@
+Program.Sub.Preflight.Start
+Program.External.Include.Library("GCG_4697_RtrUploadUPLRTRHR.lib")
+V.Global.sLogContent.Declare(String)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.Try
+	
+	F.ODBC.Connection!Con.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+	
+	F.Intrinsic.Control.SelectCase(V.Caller.Hook)
+		'BOM Compare Populate Data Hook
+		F.Intrinsic.Control.Case(50310)
+			F.Intrinsic.Control.CallSub(BuildFileFromBDF)
+		 			
+		'Post Process hook bom compare
+		F.Intrinsic.Control.Case(50312)
+			F.Intrinsic.Control.CallSub(ProcessBOMCompareResult)
+	       	
+	    'Online Update pre-On Line update hook 38120
+		F.Intrinsic.Control.CaseElse
+			f.Intrinsic.Control.CallSub(IsProcessCurrentlyRunning)
+			F.Intrinsic.Control.CallSub(GetFileList)
+			F.Intrinsic.Control.CallSub(ProcessFiles,"FileList",V.Args.FileList)
+			
+	F.Intrinsic.Control.EndSelect
+	
+	F.Intrinsic.Control.CallSub(Exit)
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "Error", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.BuildFileFromBDF.Start
+F.Intrinsic.Control.Try
+	V.Local.sColumnTitles.Declare(String)
+	V.Local.sBDFRowContent.Declare(String)
+	V.Local.sFileContent.Declare(String)
+	V.Local.sFilePath.Declare(String)
+	V.Local.iBDFRowCount.Declare(Long)
+	V.Local.iCurrentBDFRow.Declare(Long)
+	
+	F.Intrinsic.BDF.Load("BOMBDF","Main-PrePopulate-bdf")	
+
+	F.Intrinsic.BDF.ReadColumnTitle("BOMBDF",v.Local.sColumnTitles)	
+	F.Intrinsic.BDF.ReadRowCount("BOMBDF",V.Local.iBDFRowCount)
+	
+	F.Intrinsic.Math.Sub(V.Local.iBDFRowCount,1,V.Local.iBDFRowCount)
+	
+	V.Local.sFileContent.Set(V.Local.sColumnTitles)
+	
+	F.Intrinsic.Control.For(V.Local.iCurrentBDFRow,0,V.Local.iBDFRowCount,1)
+ 		F.Intrinsic.BDF.ReadRow("BOMBDF",V.Local.iCurrentBDFRow,V.Local.sBDFRowContent)
+ 		F.Intrinsic.String.Build("{0}{1}{2}",V.Local.sFileContent,V.Ambient.NewLine,V.Local.sBDFRowContent,V.Local.sFileContent)
+ 	F.Intrinsic.Control.Next(V.Local.iCurrentBDFRow)
+ 	
+ 	'Verify more data was added to the file from the BDF than just the column titles
+ 	F.Intrinsic.Control.If(V.Local.sColumnTitles,<>,V.Local.sFileContent)
+ 		F.Intrinsic.String.Build("{0}\{1}BOMCompare.txt",V.Caller.FilesDir,V.Caller.Terminal,V.Local.sFilePath)
+ 		F.Intrinsic.File.String2File(V.Local.sFilePath,V.Local.sFileContent)
+ 	F.Intrinsic.Control.EndIf
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "Error", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.BuildFileFromBDF.End
+
+Program.Sub.ProcessBOMCompareResult.Start
+F.Intrinsic.Control.Try
+	V.Local.bDocumentExists.Declare(Boolean)
+	V.Local.sBOMCompareBDFFileContent.Declare(String)
+	V.Local.sBOMCompareBDFRows.Declare(String)
+	V.Local.sDocumentFQN.Declare(String)
+	V.Local.sSQLReturn.Declare(String)
+	V.Local.sProductLine.Declare(String)
+	V.Local.sCurrentRouterSequence.Declare(String)
+	V.Local.sSql.Declare(String)
+	V.Local.iPreviousRouterSequence.Declare(Long)
+	V.Local.iRouterStepInterval.Declare(Long)
+	V.Local.iBDFRowCount.Declare(Long)
+	V.Local.iCurrentBOMCompareBDFRowIndex.Declare(Long)
+	V.Local.iRouterTemplateRow.Declare(Long)
+	V.Local.iId.Declare(Long)
+	V.Local.sBOMCompareBDFFileFQN.Declare(String)
+	V.Local.sParam.Declare(String)
+	V.Local.sCurrentBDFRowData.Declare(String)
+	V.Local.sColumnIndex.Declare(String)
+	V.Local.sUM.Declare(String)	
+	V.Local.sDocumentGroup.Declare(String)
+	V.Local.sDocumentPath.Declare(String)
+	V.Local.sDocumentName.Declare(String)
+	V.Local.sSource.Declare(String)
+	V.Local.sPartNumber.Declare(String)
+	V.Local.sRouter.Declare(String)
+	V.Local.sDescription.Declare(String)
+	V.Local.iUMIndex.Declare(Long)
+	V.Local.iDocumentGroupIndex.Declare(Long)
+	V.Local.iDocumentPathIndex.Declare(Long)
+	V.Local.iDocumentNameIndex.Declare(Long)
+	V.Local.iSourceIndex.Declare(Long)
+	V.Local.iPartNumberIndex.Declare(Long)
+	V.Local.iRouterIndex.Declare(Long)
+	V.Local.iDescriptionIndex.Declare(Long)
+	V.Local.sRetFile.Declare(String)
+	
+	F.Intrinsic.String.Build("{0}\{1}BOMCompare.txt",V.Caller.FilesDir,V.Caller.Terminal,V.Local.sBOMCompareBDFFileFQN)
+	F.Intrinsic.File.File2String(V.Local.sBOMCompareBDFFileFQN,V.Local.sBOMCompareBDFFileContent)
+	
+	'checking to see if bomcompare.txt is empty.
+	F.Intrinsic.Control.If(V.Local.sBOMCompareBDFFileContent.Length,=,0)
+		F.Intrinsic.Control.CallSub(Exit)
+	F.Intrinsic.Control.EndIf
+	
+	F.ODBC.Connection!Con.ExecuteAndReturn("SELECT F_Long FROM OP_HEADER WHERE ID = '401113' AND Sequence = '0000'",V.Local.sSQLReturn)
+	V.Local.iRouterStepInterval.Set(V.Local.sSQLReturn.Long)
+	
+	F.Intrinsic.String.Split(V.Local.sBOMCompareBDFFileContent,V.Ambient.NewLine,V.Local.sBOMCompareBDFRows)
+	
+	F.data.DataTable.CreateFromString("Pos",v.Local.sBOMCompareBDFRows(0),"column","string",v.Ambient.NewLine,"*!*",True)
+	
+	'get the position of the custom Node = DocumentGroup
+	F.Data.DataTable.Select("Pos","column = 'documentgroup'",v.Local.sColumnIndex)
+		F.Intrinsic.Control.If(v.Local.sColumnIndex,<>,"***NORETURN***")
+   		v.Local.iDocumentGroupIndex.Set(v.Local.sColumnIndex.Long)
+	Function.Intrinsic.Control.EndIf
+
+	'get the position of the custom Node = DocumentName
+	F.Data.DataTable.Select("Pos","column = 'documentname'",v.Local.sColumnIndex)
+		F.Intrinsic.Control.If(v.Local.sColumnIndex,<>,"***NORETURN***")
+   		v.Local.iDocumentNameIndex.Set(v.Local.sColumnIndex.Long)
+	Function.Intrinsic.Control.EndIf
+	
+	'get the position of the custom Node = DocumentPath
+	F.Data.DataTable.Select("Pos","column = 'documentpath'",v.Local.sColumnIndex)
+		F.Intrinsic.Control.If(v.Local.sColumnIndex,<>,"***NORETURN***")
+   		v.Local.iDocumentPathIndex.Set(v.Local.sColumnIndex.Long)
+	Function.Intrinsic.Control.EndIf
+	
+	'get the position of the custom Node = Description
+	F.Data.DataTable.Select("Pos","column = 'Description'",v.Local.sColumnIndex)
+		F.Intrinsic.Control.If(v.Local.sColumnIndex,<>,"***NORETURN***")
+   		v.Local.iDescriptionIndex.Set(v.Local.sColumnIndex.Long)
+	Function.Intrinsic.Control.EndIf
+	
+	'get the position of the custom Node = PartNo
+	F.Data.DataTable.Select("Pos","column = 'PartNo'",v.Local.sColumnIndex)
+		F.Intrinsic.Control.If(v.Local.sColumnIndex,<>,"***NORETURN***")
+   		v.Local.iPartNumberIndex.Set(v.Local.sColumnIndex.Long)
+	Function.Intrinsic.Control.EndIf
+	
+	'get the position of the Level Node = Level
+	F.Data.DataTable.Select("Pos","column = 'Router'",v.Local.sColumnIndex)
+		F.Intrinsic.Control.If(v.Local.sColumnIndex,<>,"***NORETURN***")
+   		v.Local.iRouterIndex.Set(v.Local.sColumnIndex.Long)
+	Function.Intrinsic.Control.EndIf
+	
+	'get the position of the Level Node = Level
+	F.Data.DataTable.Select("Pos","column = 'Source'",v.Local.sColumnIndex)
+		F.Intrinsic.Control.If(v.Local.sColumnIndex,<>,"***NORETURN***")
+   		v.Local.iSourceIndex.Set(v.Local.sColumnIndex.Long)
+	Function.Intrinsic.Control.EndIf
+	
+	'get the position of the Level Node = Level
+	F.Data.DataTable.Select("Pos","column = 'UM'",v.Local.sColumnIndex)
+		F.Intrinsic.Control.If(v.Local.sColumnIndex,<>,"***NORETURN***")
+   		v.Local.iUmIndex.Set(v.Local.sColumnIndex.Long)
+	Function.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.UI.InvokeWaitDialog("Attaching Documents....")
+	
+	F.Intrinsic.Control.For(V.Local.iCurrentBOMCompareBDFRowIndex,1,V.Local.sBOMCompareBDFRows.UBound,1)
+		
+   		F.Intrinsic.String.Split(V.Local.sBOMCompareBDFRows(V.Local.iCurrentBOMCompareBDFRowIndex),"|~|",V.Local.sCurrentBDFRowData)
+   		V.Local.sDocumentGroup.Set(V.Local.sCurrentBDFRowData(V.Local.iDocumentGroupIndex))
+   		V.Local.sDocumentName.Set(V.Local.sCurrentBDFRowData(V.Local.iDocumentNameIndex))
+   		V.Local.sDocumentPath.Set(V.Local.sCurrentBDFRowData(V.Local.iDocumentPathIndex))
+   		V.Local.sPartNumber.Set(V.Local.sCurrentBDFRowData(V.Local.iPartNumberIndex))
+   		V.Local.sRouter.Set(V.Local.sCurrentBDFRowData(V.Local.iRouterIndex))
+   		V.Local.sSource.Set(V.Local.sCurrentBDFRowData(V.Local.iSourceIndex))
+   		V.Local.sUM.Set(V.Local.sCurrentBDFRowData(V.Local.iUMIndex))
+   		V.Local.sDescription.Set(V.Local.sCurrentBDFRowData(V.Local.iDescriptionIndex))
+		
+		
+		'Start Logging
+		'F.Intrinsic.String.Build("Starting to process router: {0}",V.Local.SPartNumber,V.Global.sLogContent)
+		'F.Intrinsic.Control.CallSub(WriteLog,"Content",V.Global.sLogContent)
+		'End Logging
+		
+		'F.Intrinsic.Control.CallSub(DoesRouterExist,"Router",V.Local.sPartNumber)
+		
+		'F.Intrinsic.Control.If(V.Args.RouterExists,=,"N")
+			
+  			'Start Logging
+  			'F.Intrinsic.String.Build("Adding information for router: {0}",V.Local.sPartNumber,V.Global.sLogContent)
+  			'F.Intrinsic.Control.CallSub(WriteLog,"Content",V.Global.sLogContent)
+  			'End Logging
+  			
+			'Check if the document exists and attach it to the part as a new reference in document control if it does
+	      	F.Intrinsic.String.Build("{0}\{1}",V.Local.sDocumentPath,V.Local.sDocumentName,V.Local.sDocumentFQN)      	
+	      	F.Intrinsic.File.Exists(V.Local.sDocumentFQN,V.Local.bDocumentExists)
+	      	
+	      	F.Intrinsic.Control.If(V.Local.bDocumentExists)
+	      		F.Global.DocumentControl.CreateReference(V.Local.sPartNumber,30,V.Local.iId)
+	      		
+	      		F.Intrinsic.String.Build("SELECT * FROM ATG_DOC_ASSOC WHERE LINK_ID = '{0}'",V.Local.iId,V.Local.sSQL)
+	      		F.ODBC.Connection!Con.OpenLocalRecordsetRO("rstCheckDoc",V.Local.sSQL)
+	      		
+	      		F.Intrinsic.Control.If(V.ODBC.Con!rstCheckDoc.EOF,=,True)
+	      			F.Global.DocumentControl.AddDocument(V.Local.iId,V.Local.sDocumentFQN,"",V.Local.sDocumentGroup,"")
+	      		F.Intrinsic.Control.EndIf
+	      		
+	      		F.ODBC.Con!rstCheckDoc.Close
+	      	F.Intrinsic.Control.EndIf
+			
+			'1001 runs FIXBMATL which should copy material sequences from BOMs to routers
+			F.Intrinsic.Control.If(V.Local.sSource,=,"F","OR",V.Local.sSource,=,"M")
+	  			F.Intrinsic.String.Build("{0}!*!{0}",V.Local.sPartNumber,V.Local.sParam)
+	  			F.Global.General.CallWrapperSync(1001,V.Local.sParam)
+	  		F.Intrinsic.Control.EndIf
+	  		
+	      	'checking if Router Node has a value. This loop will add lines from the template router to a new router
+	      	F.Intrinsic.Control.If(V.Local.sRouter.Length,>,0)
+	      		
+	  			F.Intrinsic.String.Build("SELECT TOP 1 Product_Line FROM V_Inventory_Mstr WHERE Part = '{0}'",V.Local.sPartNumber.Trim,V.Local.sSQL)
+	  			F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL,V.Local.sProductLine)
+	  			V.Local.sProductLine.Set(V.Local.sProductLine.Trim)
+	  			
+	      		F.Intrinsic.String.Build("SELECT TOP 1 Line_Router FROM V_Router_Line WHERE Router = '{0}' AND Line_Router < '995000' AND LMO = 'M' ORDER BY Line_Router DESC",V.Local.sPartNumber,V.Local.sSQL)
+	      		F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL,V.Local.sSQLReturn)
+	      		
+	      		'If nothing is returned then we need to add the header record ourselves
+	      		F.Intrinsic.Control.If(V.Local.sSQLReturn.Length,=,0)
+	      			
+		  			'Start Logging
+		  			'F.Intrinsic.String.Build("Template lines for part number {0} found from template router: {1}",V.Local.sPartNumber,V.Local.sRouter,V.Global.sLogContent)
+		  			'F.Intrinsic.Control.CallSub(WriteLog,"Content",V.Global.sLogContent)
+		  			'End Logging
+  				
+	      			F.Intrinsic.Control.CallSub("ROUTERClear")
+	      			
+	      			V.uGlobal.uRtr(0)!Prod_Line.Set(V.Local.sProductLine)
+	      			V.uGlobal.uRtr(0)!Number.Set(V.Local.sPartNumber.Trim)
+	      			V.uGlobal.uRtr(0)!Part.Set(V.Local.sPartNumber.Trim)
+	      			V.uGlobal.uRtr(0)!Desc.Set(V.Local.sDescription.Trim)
+	      			
+	      			F.Intrinsic.Control.If(V.Local.sUM.Length,>,0)
+	      				V.uGlobal.uRtr(0)!UM.Set(V.Local.sUM.Trim)
+	      			F.Intrinsic.Control.Else
+	      				V.uGlobal.uRtr(0)!UM.Set("EA")
+	      			F.Intrinsic.Control.EndIf
+	      			
+	      			F.Intrinsic.Control.CallSub("Routeraddrecord")
+	      			F.Intrinsic.Control.CallSub("ROUTERHeader")      			
+	      			
+	      			V.Local.iPreviousRouterSequence.Set(0)
+	      			
+	      		F.Intrinsic.Control.Else
+	      			V.Local.iPreviousRouterSequence.Set(V.Local.sSQLReturn.Long)
+	      		F.Intrinsic.Control.EndIf
+				
+				'We clear here as well as in before the header so that we can be sure that if a header was built it is also cleared
+	  			F.Intrinsic.Control.CallSub("ROUTERClear")
+	  			
+				F.Intrinsic.String.Build("SELECT Part_Wc_Outside, LMO, Operation, Set_Up, Run_Time, Rate, Frequency, Desc_Rt_Line, Um_Inventory, Part_Locn, Crew_Size, WC_Factor, Overlap, Sort_Code FROM V_Router_Line WHERE Router = '{0}' ORDER BY Line_Router",V.Local.sRouter,V.Local.sSql)
+	  			
+	  			F.Data.DataTable.CreateFromSQL("RouterTemplateTable","Con",V.Local.sSQL,True)
+	  			
+	  			F.Intrinsic.Control.If(V.DataTable.RouterTemplateTable.RowCount,>,0)
+	  				'rediming udt to the datatable size
+	  				V.uGlobal.uRtr.Redim(0,V.DataTable.RouterTemplateTable.RowCount--)
+	  				
+	  				F.Intrinsic.Control.For(V.Local.iRouterTemplateRow,0,V.DataTable.RouterTemplateTable.RowCount--,1)
+	  				
+	  					F.Intrinsic.Math.Add(V.Local.iPreviousRouterSequence,V.Local.iRouterStepInterval,V.Local.sCurrentRouterSequence)
+	  					V.Local.iPreviousRouterSequence.Set(V.Local.sCurrentRouterSequence.Long)
+	  					F.Intrinsic.String.LPad(V.Local.sCurrentRouterSequence,"0",6,V.Local.sCurrentRouterSequence)
+	  					
+	  					F.Intrinsic.Control.If(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).LMO!FieldValTrim,=,"C")
+	  						V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!NUMBER.Set(V.Local.sPartNumber.Trim)
+	  						V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!LMO.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).LMO!FieldValTrim)
+	  						V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Sequence.Set(V.Local.sCurrentRouterSequence)
+	  						V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Seq_Desc.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Desc_Rt_Line!FieldValTrim)
+	  						V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Desc.Set(V.Local.sDescription)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Prod_Line.Set(V.Local.sProductLine)
+							
+	  					F.Intrinsic.Control.Else
+	      					'set the router, description, sequence
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!NUMBER.Set(V.Local.sPartNumber.Trim)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Desc.Set(V.Local.sDescription)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Prod_Line.Set(V.Local.sProductLine)						
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Sequence.Set(V.Local.sCurrentRouterSequence)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!LMO.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).LMO!FieldValTrim)
+							
+							F.Intrinsic.Control.If(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).LMO!FieldValTrim,=,"L")
+								V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!WorkCenter.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Part_Wc_Outside!FieldValTrim)
+							F.Intrinsic.Control.Else
+								V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Part.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Part_Wc_Outside!FieldValTrim)
+								V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Locn.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Part_Locn!FieldValTrim)
+							F.Intrinsic.Control.EndIf
+							
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Operation.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Operation!FieldValTrim)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Rate.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Rate!FieldValFloat)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Seq_Desc.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Desc_Rt_Line!FieldValTrim)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!RunTime.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Run_Time!FieldValFloat)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!UM.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Um_Inventory!FieldValTrim)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Setup.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Set_up!FieldValFloat)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Frequency.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Frequency!FieldValFloat)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Sort.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Sort_Code!FieldValTrim)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!WCFact.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).WC_Factor!FieldValTrim)
+							V.uGlobal.uRtr(V.Local.iRouterTemplateRow)!Overlap.Set(v.DataTable.RouterTemplateTable(V.Local.iRouterTemplateRow).Overlap!FieldValTrim)
+							
+						F.Intrinsic.Control.EndIf
+						
+	  				F.Intrinsic.Control.Next(V.Local.iRouterTemplateRow)
+	  				
+	  				F.Intrinsic.Control.CallSub("Routeraddrecord")
+	  				F.Intrinsic.Control.CallSub("ROUTERLine")
+	  				
+	  			F.Intrinsic.Control.EndIf
+	  			
+	  			F.Data.DataTable.Close("RouterTemplateTable")
+	      			
+	      	F.Intrinsic.Control.EndIf
+      	
+      	'F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.Next(v.Local.iCurrentBOMCompareBDFRowIndex)
+   	
+   	F.Intrinsic.UI.CloseWaitDialog
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "Error", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.ProcessBOMCompareResult.End
+
+Program.Sub.DoesRouterExist.Start
+F.Intrinsic.Control.Try
+	V.Local.sSQL.Declare(String)
+	V.Local.sCount.Declare(String)
+	
+	F.Intrinsic.String.Build("SELECT ROUTER FROM V_Router_Header WHERE LTRIM(RTRIM(Router)) = LTRIM(RTRIM('{0}'))",V.Args.Router,V.Local.sSQL)
+	F.ODBC.Connection!Con.OpenLocalRecordSetRO("rstCheck",V.Local.sSQL)
+	
+	F.Intrinsic.Control.If(V.ODBC.Con!rstCheck.EOF,=,True)
+		F.Intrinsic.Variable.AddRV("RouterExists","N")
+		
+		'Start Logging
+		'F.Intrinsic.String.Build("Router: {0} exists",V.Args.Router,V.Global.sLogContent)
+		'F.Intrinsic.Control.CallSub(WriteLog,"Content",V.Global.sLogContent)
+		'End Logging
+		
+	F.Intrinsic.Control.Else
+		F.Intrinsic.Variable.AddRV("RouterExists","Y")
+		
+		'Start Logging
+		'F.Intrinsic.String.Build("Router: {0} does not exist",V.Args.Router,V.Global.sLogContent)
+		'F.Intrinsic.Control.CallSub(WriteLog,"Content",V.Global.sLogContent)
+		'End Logging
+		
+	F.Intrinsic.Control.EndIf
+	
+	F.ODBC.Con!rstCheck.Close
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "Error", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.DoesRouterExist.End
+
+Program.Sub.GetFileList.Start
+F.Intrinsic.Control.Try
+	V.Local.sFileFilter.Declare(String)
+	V.Local.sFileList.Declare(String)
+	
+	F.Intrinsic.String.Build("{0}\VAUpload\*.gssxml",V.Caller.FilesDir,V.Local.sFileFilter)
+	F.Intrinsic.File.GetFileList(V.Local.sFileFilter,V.Local.sFileList)
+	
+	F.Intrinsic.Variable.AddRV("FileList",V.Local.sFileList)
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "Error", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.GetFileList.End
+
+Program.Sub.ProcessFiles.Start
+F.Intrinsic.Control.Try
+	V.Local.sFileUploadDirectory.Declare(String)
+	V.Local.sFileProcessedDirectory.Declare(String)
+	V.Local.sCurrentFileFQN.Declare(String)
+	V.Local.sFileNames.Declare(String)
+	V.Local.sCurrentFileName.Declare(String)
+	V.Local.sCurrentFileNameNoExtension.Declare(String)
+	V.Local.sNewFileFQN.Declare(String)
+	V.Local.sSplitFileName.Declare(String)
+	V.Local.iCurrentFileNameIndex.Declare(Long)
+	V.Local.iMoveFileReturn.Declare(Long)
+	V.Local.bFileExists.Declare(Boolean)
+	V.Local.bIsBomCompareRunning.Declare(Boolean)
+	V.Local.bRet.Declare(Boolean)
+	V.Local.bRet2.Declare(Boolean)
+	
+	F.Intrinsic.String.Build("{0}\VAUpload",V.Caller.FilesDir,V.Local.sFileUploadDirectory)
+	F.Intrinsic.String.Build("{0}\Processed",V.Local.sFileUploadDirectory,V.Local.sFileProcessedDirectory)
+	
+	F.Intrinsic.Control.CallSub(VerifyDirectoryExists,"Directory",V.Local.sFileUploadDirectory)
+	F.Intrinsic.Control.CallSub(VerifyDirectoryExists,"Directory",V.Local.sFileProcessedDirectory)
+
+	F.Intrinsic.String.Split(V.Args.FileList,":",V.Local.sFileNames)
+	
+	F.Intrinsic.Control.For(V.Local.iCurrentFileNameIndex,0,V.Local.sFileNames.UBound,1)
+		V.Local.sCurrentFileName.Set(V.Local.sFileNames(V.Local.iCurrentFileNameIndex))
+		F.Intrinsic.String.Replace(V.Local.sCurrentFileName,".gssxml","",V.Local.sCurrentFIleNameNoExtension)
+		
+		F.Intrinsic.Control.CallSub(DoesRouterExist,"Router",V.Local.sCurrentFIleNameNoExtension)
+		
+		F.Intrinsic.Control.If(V.Args.RouterExists,=,"N")
+			F.Intrinsic.String.Build("{0}\{1}",V.Local.sFileUploadDirectory,V.Local.sCurrentFileName,V.Local.sCurrentFileFQN)		
+			F.Intrinsic.File.Exists(V.Local.sCurrentFileFQN,V.Local.bFileExists)
+			
+			F.Intrinsic.Control.If(V.Local.bFileExists)
+				
+				'Launch the file which should launch BomCompare assuming client PC's default program for .gssxml files is BomCompare
+				F.Intrinsic.Task.ShellExecSync(V.Caller.Handle,"",V.Local.sCurrentFileFQN,"","",1)
+			
+				F.Intrinsic.UI.Sleep(2)
+				
+				F.Intrinsic.Task.IsProgramRunning("BomCompare.exe",V.Local.bIsBomCompareRunning)
+			
+				F.Intrinsic.Control.DoUntil(V.Local.bIsBomCompareRunning.Not)
+					F.Intrinsic.UI.Sleep(2)
+					F.Intrinsic.Task.IsProgramRunning("BomCompare.exe",V.Local.bIsBomCompareRunning)
+				F.Intrinsic.Control.Loop
+				
+				F.Intrinsic.String.Split(V.Local.sCurrentFileName,".",V.Local.sSplitFileName)
+				F.Intrinsic.String.Build("{0}\{1}{2}.gssxml",V.Local.sFileProcessedDirectory,V.Local.sSplitFileName(0),V.Ambient.Now.FormatMMDDYYHHNN,V.Local.sNewFileFQN)
+				
+				F.Intrinsic.File.MoveFile(V.Local.sCurrentFileFQN,V.Local.sNewFileFQN,V.Local.iMoveFileReturn)
+				
+				'Check for file and delete it if it still exists after the move. Otherwise it's going to get pushed up again. Make sure it actually moved first
+				F.Intrinsic.Control.If(V.Local.iMoveFileReturn,<>,0)
+					F.Intrinsic.File.Exists(V.Local.sCurrentFileFQN,V.Local.bRet)
+					F.Intrinsic.File.Exists(V.Local.sNewFileFQN,V.Local.bRet2)
+					
+					F.Intrinsic.Control.If(V.Local.bRet,=,True,"AND",V.Local.bRet2,=,True)
+						F.Intrinsic.File.DeleteFile(V.Local.sCurrentFileFQN)
+					F.Intrinsic.Control.EndIf
+				F.Intrinsic.Control.EndIf			
+			F.Intrinsic.Control.EndIf
+		F.Intrinsic.Control.Else
+			F.Intrinsic.String.Build("{0}\{1}",V.Local.sFileUploadDirectory,V.Local.sCurrentFileName,V.Local.sCurrentFileFQN)		
+			F.Intrinsic.File.Exists(V.Local.sCurrentFileFQN,V.Local.bFileExists)
+			
+			F.Intrinsic.Control.If(V.Local.bFileExists)
+				F.Intrinsic.File.DeleteFile(V.Local.sCurrentFileFQN)
+			F.Intrinsic.Control.EndIf
+		F.Intrinsic.Control.EndIf
+		
+	F.Intrinsic.Control.Next(V.Local.iCurrentFileNameIndex)
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "Error", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.ProcessFiles.End
+
+Program.Sub.VerifyDirectoryExists.Start
+F.Intrinsic.Control.Try
+	V.Local.sMessage.Declare(String)
+	V.Local.bDirectoryExists.Declare(Boolean)
+	
+	F.Intrinsic.File.DirExists(V.Args.Directory,V.Local.bDirectoryExists)
+	
+	F.Intrinsic.Control.If(V.Local.bDirectoryExists.Not)
+		
+		F.Intrinsic.Control.Try
+			F.Intrinsic.File.CreateDir(V.Args.Directory)
+		F.Intrinsic.Control.Catch
+			F.Intrinsic.String.Build("Project: GCG_4697_BOM_Compare.g2u. {0}Unable to create directory: {1}. Process will end.",V.Ambient.NewLine,V.Args.Directory,V.Local.sMessage)
+			F.Intrinsic.UI.Msgbox(V.Local.sMessage,"Error During Processing")
+			F.Intrinsic.Control.CallSub(Exit)
+		F.Intrinsic.Control.EndTry
+		
+	F.Intrinsic.Control.EndIf
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "Error", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.VerifyDirectoryExists.End
+
+Program.Sub.IsProcessCurrentlyRunning.Start
+F.Intrinsic.Control.Try
+	v.Local.sOldPID.Declare(String)
+	V.Local.sPIDFileFQN.Declare(String)
+	v.Local.bPIDFileExists.Declare(Boolean)
+	V.Local.bIsOldPIDRunning.Declare(Boolean)
+	
+	'We run the program async so it will not hold up On-Line Update so we need to make sure not to run on top of ourself with previous/later calls to the program
+	f.Intrinsic.String.Build("{0}\4697.pid",v.Caller.FilesDir,v.Local.sPIDFileFQN)
+	f.Intrinsic.File.Exists(v.Local.sPIDFileFQN,v.Local.bPIDFileExists)
+	
+	f.Intrinsic.Control.If(v.Local.bPIDFileExists)
+		f.Intrinsic.File.File2String(v.local.sPIDFileFQN,v.Local.sOldPID)
+		f.Intrinsic.Task.PIDRunning(v.Local.sOldPID.Long,v.Local.bIsOldPIDRunning)
+		
+		'If the old PID is running we'll exit the program to prevent running on top of it. Otherwise we'll write our current PID to the PID file to let later processes know we're running
+		f.Intrinsic.Control.If(v.Local.bIsOldPIDRunning)
+			F.Intrinsic.Control.CallSub(Exit)	
+		f.Intrinsic.Control.Else
+			f.Intrinsic.File.String2File(v.Local.sPIDFileFQN,v.Ambient.PID)
+		f.Intrinsic.Control.EndIf
+		
+	f.Intrinsic.Control.Else
+		f.Intrinsic.File.String2File(v.Local.sPIDFileFQN,v.Ambient.PID)
+	f.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "Error", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.IsProcessCurrentlyRunning.End
+
+'Standard log writing function
+Program.Sub.WriteLog.Start
+F.Intrinsic.Control.Try
+	V.Local.sFilePath.Declare(String)
+	V.Local.sFileContent.Declare(String)
+	V.Local.bFileExists.Declare(Boolean)
+
+	F.Intrinsic.String.Build("{0}\GCG_4697.log",V.Caller.GasDir,V.Local.sFilePath)
+	F.Intrinsic.String.Build("Date: {0}. Time: {1}. Action: {2}.",V.Ambient.Date,V.Ambient.Time,V.Args.Content,V.Local.sFileContent)
+
+	F.Intrinsic.File.Exists(V.Local.sFilePath,V.Local.bFileExists)
+
+	F.Intrinsic.Control.If(V.Local.bFileExists)
+		F.Intrinsic.File.Append2FileNewLine(V.Local.sFilePath,V.Local.sFileContent)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.File.String2File(V.Local.sFilePath,V.Local.sFileContent)
+	F.Intrinsic.Control.EndIf
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "ErrNo", V.Ambient.ErrorNumber, "ErrDesc", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.WriteLog.End
+
+Program.Sub.Exit.Start
+F.Intrinsic.Control.Try
+
+	F.ODBC.Connection!Con.Close
+	F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "Error", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.Exit.End
+
+Program.Sub.CatchError.Start
+F.Intrinsic.Control.Try
+	V.Local.sErrorMessage.Declare(String)
+	
+	F.Intrinsic.String.Build("Program: GCG_4697_BOM_Compare.g2u{0}{0}Sub: {1}{0}Error: {2}{0}Error Description: {3}",V.Ambient.NewLine,V.Args.Sub,V.Args.Error,V.Args.ErrorDescription,V.Local.sErrorMessage)
+	F.Intrinsic.UI.Msgbox(V.Local.sErrorMessage,"Unhandled Error Occurred")
+	
+	F.Intrinsic.Control.If(V.Args.Sub.UCase,!=,"EXIT")
+		F.Intrinsic.Control.CallSub(Exit)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.Control.End
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Catch
+	F.Intrinsic.UI.Msgbox("Fatal Error occurred in program GCG_4697_BOM_Compare.g2u","Unhandled Error Occurred")
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.CatchError.End
